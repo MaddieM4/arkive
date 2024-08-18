@@ -2,6 +2,11 @@
 name = "arkive"
 version = "0.8.13"
 edition = "2021"
+license = "GPL-3.0-only"
+
+description = "Immutable archive manipulation library."
+repository = "https://github.com/MaddieM4/arkive"
+readme = "README.md"
 
 [dependencies]
 hex = "0.4.3"
