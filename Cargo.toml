@@ -1,6 +1,6 @@
 [package]
 name = "arkive"
-version = "0.8.13"
+version = "0.8.13-1"
 edition = "2021"
 license = "GPL-3.0-only"
 

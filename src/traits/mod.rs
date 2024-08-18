@@ -2,6 +2,7 @@
 
 pub mod entries;
 pub mod import;
+pub mod load;
 pub mod read;
 pub mod save;
 pub mod scan;

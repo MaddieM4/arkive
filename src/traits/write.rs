@@ -1,3 +1,5 @@
+//! Write files to disk.
+
 use crate::types::*;
 use std::fs::{copy, create_dir_all};
 use std::io::Result;
@@ -28,6 +30,32 @@ impl Ark<PathBuf> {
     }
 }
 
+impl Ark<Digest> {
+    /// Write files to a directory.
+    ///
+    /// TODO: Permissions
+    pub fn write(&self, db: &DB, dest: impl AsRef<Path>) -> Result<()> {
+        let p = dest.as_ref();
+        for (ipr, _, contents) in self.files() {
+            let dest_file = p.join(ipr.as_ref());
+            match dest_file.parent() {
+                Some(parent_dir) => create_dir_all(parent_dir)?,
+                None => (),
+            }
+            let src_file = db.join("cas").join(contents.to_hex());
+            copy(src_file, dest_file)?;
+        }
+
+        for (ipr, _) in self.dirs() {
+            let dest_dir = p.join(ipr.as_ref());
+            if !dest_dir.exists() {
+                create_dir_all(dest_dir)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -46,6 +74,16 @@ mod test {
         ark.write(&td)?;
         assert!(td.path().join("dir1/dir2/nested.txt").exists());
         assert!(td.path().join("dir1/dir2/emptydir").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn import_export_cycle() -> Result<()> {
+        let td = tempfile::tempdir()?;
+        let db = DB::new_temp()?;
+        let digest: Digest = Ark::scan("fixture")?.import(&db)?;
+        Ark::<Digest>::load(&db, &digest)?.write(&db, &td)?;
+        assert!(td.path().join("dir1/dir2/nested.txt").exists());
         Ok(())
     }
 }

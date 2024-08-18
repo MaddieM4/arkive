@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "arkive"
-version = "0.1.0"
+version = "0.8.13-1"
 dependencies = [
  "hex",
  "lazy-regex",
