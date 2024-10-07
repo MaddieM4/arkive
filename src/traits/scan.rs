@@ -64,6 +64,7 @@ mod test {
 
     #[test]
     fn scan() -> Result<()> {
+        crate::setup_fixture();
         let ark = Ark::scan("fixture")?;
 
         /*

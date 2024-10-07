@@ -31,6 +31,7 @@ mod test {
 
     #[test]
     fn read() -> Result<()> {
+        crate::setup_fixture();
         let ark = Ark::scan("fixture")?.read()?;
         assert_eq!(
             ark.paths(),

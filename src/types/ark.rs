@@ -155,6 +155,7 @@ mod test {
 
     #[test]
     fn test_files() {
+        crate::setup_fixture();
         let ark = Ark::scan("fixture").expect("Scanned fixture");
         let mut files = ark.files();
 
@@ -179,6 +180,7 @@ mod test {
 
     #[test]
     fn test_dirs() {
+        crate::setup_fixture();
         let ark = Ark::scan("fixture").expect("Scanned fixture");
         let mut dirs = ark.dirs();
 

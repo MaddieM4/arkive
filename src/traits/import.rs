@@ -98,6 +98,7 @@ mod test {
 
     #[test]
     fn import_files() -> Result<()> {
+        crate::setup_fixture();
         let db = DB::new_temp()?;
         let ark = Ark::scan("fixture")?.import_files(&db)?;
 
@@ -135,6 +136,7 @@ mod test {
 
     #[test]
     fn import() -> Result<()> {
+        crate::setup_fixture();
         let db = DB::new_temp()?;
         let digest = Ark::scan("fixture")?.import(&db)?;
         assert_eq!(

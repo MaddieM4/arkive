@@ -38,3 +38,16 @@ pub mod types;
 
 pub use traits::*;
 pub use types::*;
+
+#[cfg(test)]
+static TEST_INIT: std::sync::Once = std::sync::Once::new();
+
+#[cfg(test)]
+fn setup_fixture() {
+    TEST_INIT.call_once(|| {
+        std::process::Command::new("chmod")
+            .args(["-R", "g+w", "fixture"])
+            .status()
+            .expect("Failed to fix fixture permissions");
+    });
+}
