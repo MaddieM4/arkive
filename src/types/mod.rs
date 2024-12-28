@@ -1,7 +1,11 @@
-pub mod ipr;
-pub mod digest;
+//pub mod ark;
 pub mod db;
+pub mod digest;
+pub mod entry;
+pub mod ipr;
 
-pub use ipr::*;
-pub use digest::*;
+//pub use ark::*;
 pub use db::*;
+pub use digest::*;
+pub use entry::*;
+pub use ipr::*;
