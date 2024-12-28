@@ -1,5 +1,6 @@
-use crate::types::entry::{to_entries, Content, ToEntry};
+use crate::types::entry::{to_entries, Content, Entry, ToEntry};
 use crate::types::ipr::IPR;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 pub struct Ark<C, M = ()> {
@@ -15,15 +16,21 @@ impl<C, M> Ark<C, M> {
         SRC: IntoIterator,
         SRC::Item: ToEntry<Content = C, Metadata = M>,
     {
-        // TODO: uniq
-        // TODO: sort order
+        let uniq: HashMap<IPR, (M, Content<C>)> =
+            to_entries(src).map(|(p, m, c)| (p, (m, c))).collect();
+
+        let mut entries: Vec<Entry<C, M>> = uniq.into_iter().map(|(p, (m, c))| (p, m, c)).collect();
+
+        // TODO: Sort by type too
+        // (final section depends on it)
+        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
         let mut paths: Vec<IPR> = vec![];
         let mut metas: Vec<M> = vec![];
         let mut files: Vec<C> = vec![];
         let mut links: Vec<String> = vec![];
 
-        for (p, m, c) in to_entries(src) {
+        for (p, m, c) in entries {
             paths.push(p);
             metas.push(m);
             match c {
@@ -59,7 +66,16 @@ mod test {
     #[test]
     fn test_from_entries_dirs() {
         let ark = Ark::from_entries(["foo", "bar"]);
-        assert_eq!(ark.paths, vec!["foo".to_ipr(), "bar".to_ipr()].into());
+        assert_eq!(ark.paths, vec!["bar".to_ipr(), "foo".to_ipr()].into());
+        assert_eq!(ark.metas, vec![(), ()].into());
+        assert_eq!(ark.files, vec![].into());
+        assert_eq!(ark.links, vec![].into());
+    }
+
+    #[test]
+    fn test_from_entries_uniq() {
+        let ark = Ark::from_entries(["foo", "bar", "foo", "bar", "bar"]);
+        assert_eq!(ark.paths, vec!["bar".to_ipr(), "foo".to_ipr()].into());
         assert_eq!(ark.metas, vec![(), ()].into());
         assert_eq!(ark.files, vec![].into());
         assert_eq!(ark.links, vec![].into());
