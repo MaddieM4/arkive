@@ -1,29 +1,67 @@
+use crate::types::entry::{to_entries, Content, ToEntry};
 use crate::types::ipr::IPR;
 use std::rc::Rc;
 
-struct Ark<C, M=()> {
-  paths: Rc<Vec<IPR>>,
-  metas: Rc<Vec<M>>,
-  files: Rc<Vec<C>>,
-  links: Rc<Vec<String>>,
+pub struct Ark<C, M = ()> {
+    paths: Rc<Vec<IPR>>,
+    metas: Rc<Vec<M>>,
+    files: Rc<Vec<C>>,
+    links: Rc<Vec<String>>,
 }
 
-impl<C,M> Ark<C, M> {
-  fn from_entries() -> Self {
-    todo!()
-  }
+impl<C, M> Ark<C, M> {
+    pub fn from_entries<SRC>(src: SRC) -> Self
+    where
+        SRC: IntoIterator,
+        SRC::Item: ToEntry<Content = C, Metadata = M>,
+    {
+        // TODO: uniq
+        // TODO: sort order
+
+        let mut paths: Vec<IPR> = vec![];
+        let mut metas: Vec<M> = vec![];
+        let mut files: Vec<C> = vec![];
+        let mut links: Vec<String> = vec![];
+
+        for (p, m, c) in to_entries(src) {
+            paths.push(p);
+            metas.push(m);
+            match c {
+                Content::File(content) => files.push(content),
+                Content::Symlink(s) => links.push(s),
+                Content::Directory => (),
+            };
+        }
+
+        Self {
+            paths: Rc::new(paths),
+            metas: Rc::new(metas),
+            files: Rc::new(files),
+            links: Rc::new(links),
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
-  use super::*;
+    use super::*;
+    use crate::types::ipr::ToIPR;
 
-  #[test]
-  fn test_from_entries() {
-    /*
-    let ark = Ark.from_entries([
-      ("", 
-    ]);
-    */
-  }
+    #[test]
+    fn test_from_entries_empty() {
+        let ark = Ark::from_entries::<[&str; 0]>([]);
+        assert_eq!(ark.paths, vec![].into());
+        assert_eq!(ark.metas, vec![].into());
+        assert_eq!(ark.files, vec![].into());
+        assert_eq!(ark.links, vec![].into());
+    }
+
+    #[test]
+    fn test_from_entries_dirs() {
+        let ark = Ark::from_entries(["foo", "bar"]);
+        assert_eq!(ark.paths, vec!["foo".to_ipr(), "bar".to_ipr()].into());
+        assert_eq!(ark.metas, vec![(), ()].into());
+        assert_eq!(ark.files, vec![].into());
+        assert_eq!(ark.links, vec![].into());
+    }
 }
