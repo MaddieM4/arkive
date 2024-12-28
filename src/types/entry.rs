@@ -4,7 +4,7 @@
 
 use crate::types::ipr::*;
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum Content<C> {
     File(C),
     Symlink(String),
@@ -46,6 +46,18 @@ impl ToEntry for (&str, Option<&str>) {
             None => Content::Directory,
         };
         (self.0.to_ipr(), (), c)
+    }
+}
+
+impl<C, M> ToEntry for (&str, M, Content<C>)
+where
+    C: Clone,
+    M: Clone,
+{
+    type Metadata = M;
+    type Content = C;
+    fn to_entry(&self) -> Entry<Self::Content, Self::Metadata> {
+        (self.0.to_ipr(), self.1.clone(), self.2.clone())
     }
 }
 
