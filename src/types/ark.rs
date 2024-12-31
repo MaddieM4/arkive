@@ -38,6 +38,8 @@ impl<C, M> Ark<C, M> {
         let mut files: Vec<C> = vec![];
         let mut links: Vec<String> = vec![];
 
+        // Can you see why this only works if we ingest in
+        // category order? Files, then links, then dirs?
         for (p, m, c) in entries {
             paths.push(p);
             metas.push(m);
@@ -54,6 +56,25 @@ impl<C, M> Ark<C, M> {
             files: Rc::new(files),
             links: Rc::new(links),
         }
+    }
+
+    pub fn to_entries(self) -> Vec<Entry<C, M>>
+    where
+        M: Clone,
+        C: Clone,
+    {
+        let f = (*self.files).clone().into_iter().map(|x| Content::File(x));
+        let l = (*self.links)
+            .clone()
+            .into_iter()
+            .map(|x| Content::Symlink(x));
+        let d = std::iter::from_fn(move || Some(Content::Directory));
+        let contents = f.chain(l).chain(d);
+
+        std::iter::zip((*self.paths).clone(), (*self.metas).clone())
+            .zip(contents)
+            .map(|((p, m), c)| (p, m, c))
+            .collect()
     }
 }
 
@@ -139,5 +160,22 @@ mod test {
         assert_eq!(ark.metas, vec!["c", "b", "a"].into());
         assert_eq!(ark.files, vec!["Sea!".to_owned()].into());
         assert_eq!(ark.links, vec!["../b".to_owned()].into());
+    }
+
+    #[test]
+    fn test_to_entries() {
+        let ark = Ark::from_entries([
+            ("aaa", "a", Content::Directory),
+            ("bbb", "b", Content::Symlink("../b".into())),
+            ("ccc", "c", Content::File("Sea!".into())),
+        ]);
+        assert_eq!(
+            ark.to_entries(),
+            vec![
+                ("ccc".to_ipr(), "c", Content::File("Sea!".to_owned())),
+                ("bbb".to_ipr(), "b", Content::Symlink("../b".to_owned())),
+                ("aaa".to_ipr(), "a", Content::Directory),
+            ]
+        );
     }
 }
