@@ -2,55 +2,23 @@
 
 use std::fs::{DirEntry, Metadata, ReadDir};
 
-pub struct Scanner<S>
-where
-    S: Fn(DirEntry) -> bool,
-{
-    stack: Vec<ReadDir>,
-    criteria: S,
-}
-
-impl<S> Scanner<S>
-where
-    S: Fn(std::fs::DirEntry) -> bool,
-{
-    pub fn new(path: impl AsRef<std::path::Path>, criteria: S) -> std::io::Result<Self> {
-        let rd = std::fs::read_dir(path)?;
-        Ok(Self {
-            stack: vec![rd],
-            criteria: criteria,
-        })
-    }
-
-    fn consider(
-        &mut self,
-        item: std::io::Result<DirEntry>,
-    ) -> std::io::Result<(Metadata, DirEntry)> {
-        let de = item?;
-        let m = de.metadata()?;
-        if m.is_dir() {
-            let rd = std::fs::read_dir(de.path())?;
-            self.stack.push(rd);
-        }
-        Ok((m, de))
-    }
-}
-
-impl<S> Iterator for Scanner<S>
-where
-    S: Fn(DirEntry) -> bool,
-{
-    type Item = std::io::Result<(Metadata, DirEntry)>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        while let Some(mut rd) = self.stack.pop() {
-            if let Some(item) = rd.next() {
-                self.stack.push(rd);
-                return Some(self.consider(item));
+fn visit(
+    root: impl AsRef<std::path::Path>,
+    mut predicate: impl FnMut(&Metadata, &DirEntry) -> bool,
+) -> std::io::Result<()> {
+    let mut stack: Vec<ReadDir> = vec![std::fs::read_dir(root)?];
+    while let Some(mut rd) = stack.pop() {
+        if let Some(opt_de) = rd.next() {
+            stack.push(rd);
+            let de = opt_de?;
+            let m = de.metadata()?;
+            let should_descend = predicate(&m, &de);
+            if m.is_dir() && should_descend {
+                stack.push(std::fs::read_dir(de.path())?);
             }
         }
-        return None;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -58,10 +26,13 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_scan_fixture() -> std::io::Result<()> {
-        let mut v = Scanner::new("./fixture", |_| true)?
-            .map(|mde| Ok(mde?.1.path().to_string_lossy().to_string()))
-            .collect::<std::io::Result<Vec<String>>>()?;
+    fn test_visit() -> std::io::Result<()> {
+        let mut v: Vec<String> = vec![];
+        visit("./fixture", |_, de| {
+            v.push(de.path().to_string_lossy().into());
+            true
+        })?;
+
         v.sort();
         assert_eq!(
             v,
@@ -72,6 +43,23 @@ mod test {
                 "./fixture/file_at_root.txt",
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_visit_criteria() -> std::io::Result<()> {
+        let mut v: Vec<String> = vec![];
+        visit("./fixture", |_, de| {
+            if de.file_name() == "dir2" {
+                false
+            } else {
+                v.push(de.path().to_string_lossy().into());
+                true
+            }
+        })?;
+
+        v.sort();
+        assert_eq!(v, vec!["./fixture/dir1", "./fixture/file_at_root.txt",]);
         Ok(())
     }
 }
