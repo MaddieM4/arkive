@@ -1,150 +1,80 @@
-//! The core Ark datastructure.
-
-use crate::types::attrs::Attrs;
+use crate::types::entry::{to_entries, Content, Entry, ToEntry};
 use crate::types::ipr::IPR;
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::rc::Rc;
 
-/// Representation of an Archive.
-///
-/// Because this is generic, it can represent things like a directory on disk,
-/// allowing us to convert an Ark of on-disk files into an Ark of imported files
-/// in a simple, high-performance way. It obviates the need for things like a
-/// stream API, and allows for a lot of tests to be done in-memory without disk.
-///
-/// The underlying format is an SOA approach, which you can inspect with:
-///
-///   - ark.paths()
-///   - ark.attrs()
-///   - ark.contents()
-///
-/// These three channels are implemented as immutable, reference-counted
-/// vectors. This is great for memory hygiene! Almost every possible
-/// transformation you'd ever want to do on an Ark will leave one or two
-/// channels unchanged, and create a new vector for the stuff that _is_
-/// changing.
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub struct Ark<C>(
-    pub(crate) Rc<Vec<IPR>>,
-    pub(crate) Rc<Vec<Attrs>>,
-    pub(crate) Rc<Vec<C>>,
-);
+pub struct Ark<C, M = ()> {
+    paths: Rc<Vec<IPR>>,
+    metas: Rc<Vec<M>>,
+    files: Rc<Vec<C>>,
+    links: Rc<Vec<String>>,
+}
 
-impl<C> Ark<C> {
-    /// Internal paths list.
-    ///
-    /// In an archive of length F+D, the following is guaranteed:
-    ///
-    ///  - This vector is length F+D.
-    ///  - There are no duplicate paths.
-    ///  - All files come before all directories.
-    ///  - Within each of those sections, paths are sorted.
-    pub fn paths(&self) -> &Vec<IPR> {
-        &self.0
-    }
+impl<C, M> Ark<C, M> {
+    // This conversion isn't as cheap as I'd like, but I don't
+    // want to mess with it further until that's a problem in
+    // the profiler. Odds of being a real bottleneck: low.
+    pub fn from_entries<SRC>(src: SRC) -> Self
+    where
+        SRC: IntoIterator,
+        SRC::Item: ToEntry<Content = C, Metadata = M>,
+    {
+        let uniq: HashMap<IPR, (M, Content<C>)> =
+            to_entries(src).map(|(p, m, c)| (p, (m, c))).collect();
 
-    /// Internal attrs list.
-    ///
-    /// In an archive of length F+D, the following is guaranteed:
-    ///
-    ///  - This vector is length F+D.
-    ///  - `ark.attrs()[N]` corresponds to `ark.paths()[N]`.
-    pub fn attrs(&self) -> &Vec<Attrs> {
-        &self.1
-    }
+        let mut entries: Vec<Entry<C, M>> = uniq.into_iter().map(|(p, (m, c))| (p, m, c)).collect();
 
-    /// Internal contents list.
-    ///
-    /// In an archive of length F+D, the following is guaranteed:
-    ///
-    ///  - This vector is length F, not F+D.
-    ///  - `ark.contents()[N]` corresponds to `ark.paths()[N]`.
-    pub fn contents(&self) -> &Vec<C> {
-        &self.2
-    }
+        // We get everything in path order, then don't break that
+        // internal ordering when we sort into groups.
+        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        entries.sort_by_key(|(_, _, c)| match c {
+            Content::File(_) => 0,
+            Content::Symlink(_) => 1,
+            Content::Directory => 2,
+        });
 
-    /// Number of entries in this Ark.
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
+        let mut paths: Vec<IPR> = vec![];
+        let mut metas: Vec<M> = vec![];
+        let mut files: Vec<C> = vec![];
+        let mut links: Vec<String> = vec![];
 
-    /// Iterate the files in an Archive
-    pub fn files<'a>(&'a self) -> FileIterator<'a, C> {
-        FileIterator {
-            inner: &self,
-            pos: 0,
+        // Can you see why this only works if we ingest in
+        // category order? Files, then links, then dirs?
+        for (p, m, c) in entries {
+            paths.push(p);
+            metas.push(m);
+            match c {
+                Content::File(content) => files.push(content),
+                Content::Symlink(s) => links.push(s),
+                Content::Directory => (),
+            };
+        }
+
+        Self {
+            paths: Rc::new(paths),
+            metas: Rc::new(metas),
+            files: Rc::new(files),
+            links: Rc::new(links),
         }
     }
 
-    /// Iterate the dirs in an Archive
-    pub fn dirs<'a>(&'a self) -> DirIterator<'a, C> {
-        DirIterator {
-            inner: &self,
-            pos: self.0.len(),
-        }
-    }
+    pub fn to_entries(self) -> Vec<Entry<C, M>>
+    where
+        M: Clone,
+        C: Clone,
+    {
+        let f = (*self.files).clone().into_iter().map(|x| Content::File(x));
+        let l = (*self.links)
+            .clone()
+            .into_iter()
+            .map(|x| Content::Symlink(x));
+        let d = std::iter::from_fn(move || Some(Content::Directory));
+        let contents = f.chain(l).chain(d);
 
-    /// Slap together a new Ark from the constituent pieces.
-    ///
-    /// Panics if length invariants aren't fulfilled.
-    pub fn compose(paths: Rc<Vec<IPR>>, attrs: Rc<Vec<Attrs>>, contents: Rc<Vec<C>>) -> Self {
-        assert!(paths.len() == attrs.len());
-        assert!(paths.len() >= contents.len());
-        Self(paths, attrs, contents)
-    }
-
-    /// Break an Ark into its constituent components, moving them.
-    ///
-    /// This is designed to pair with `compose` to allow you to reuse backing
-    /// memory while doing transformations. Usually you'll only care about
-    /// transforming one, maybe two of the three channels.
-    pub fn decompose(self) -> (Rc<Vec<IPR>>, Rc<Vec<Attrs>>, Rc<Vec<C>>) {
-        (self.0, self.1, self.2)
-    }
-
-    /// Create an empty Ark.
-    ///
-    /// Not as widely useful as you'd think, since Ark is efficient for bulk
-    /// operations, and not a great type for incremental mutability. Usually
-    /// you'll want to work with a list of `(path, attrs, Contents<C>)` tuples for
-    /// poking around in little bits and pieces. These convert back and forth
-    /// with Arks very easily.
-    pub fn empty() -> Self {
-        Self::compose(Rc::new(vec![]), Rc::new(vec![]), Rc::new(vec![]))
-    }
-}
-
-pub struct FileIterator<'a, C> {
-    inner: &'a Ark<C>,
-    pos: usize,
-}
-impl<'a, C> Iterator for FileIterator<'a, C> {
-    type Item = (&'a IPR, &'a Attrs, &'a C);
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.inner.2.len() {
-            None
-        } else {
-            let pos = self.pos;
-            self.pos = pos + 1;
-            Some((&self.inner.0[pos], &self.inner.1[pos], &self.inner.2[pos]))
-        }
-    }
-}
-
-pub struct DirIterator<'a, C> {
-    inner: &'a Ark<C>,
-    pos: usize,
-}
-impl<'a, C> Iterator for DirIterator<'a, C> {
-    type Item = (&'a IPR, &'a Attrs);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos == 0 {
-            None
-        } else {
-            self.pos = self.pos - 1;
-            Some((&self.inner.0[self.pos], &self.inner.1[self.pos]))
-        }
+        std::iter::zip((*self.paths).clone(), (*self.metas).clone())
+            .zip(contents)
+            .map(|((p, m), c)| (p, m, c))
+            .collect()
     }
 }
 
@@ -154,51 +84,98 @@ mod test {
     use crate::types::ipr::ToIPR;
 
     #[test]
-    fn test_files() {
-        crate::setup_fixture();
-        let ark = Ark::scan("fixture").expect("Scanned fixture");
-        let mut files = ark.files();
-
-        // Sorted order
-        assert_eq!(
-            files.next(),
-            Some((
-                &"dir1/dir2/nested.txt".to_ipr(),
-                &Attrs::new().append("UNIX_MODE", "33204"),
-                &std::path::PathBuf::from("fixture/dir1/dir2/nested.txt"),
-            ))
-        );
-        assert_eq!(
-            files.next(),
-            Some((
-                &"file_at_root.txt".to_ipr(),
-                &Attrs::new().append("UNIX_MODE", "33204"),
-                &std::path::PathBuf::from("fixture/file_at_root.txt"),
-            ))
-        );
+    fn test_from_entries_empty() {
+        let ark = Ark::from_entries::<[&str; 0]>([]);
+        assert_eq!(ark.paths, vec![].into());
+        assert_eq!(ark.metas, vec![].into());
+        assert_eq!(ark.files, vec![].into());
+        assert_eq!(ark.links, vec![].into());
     }
 
     #[test]
-    fn test_dirs() {
-        crate::setup_fixture();
-        let ark = Ark::scan("fixture").expect("Scanned fixture");
-        let mut dirs = ark.dirs();
+    fn test_from_entries_dirs() {
+        let ark = Ark::from_entries(["foo", "bar"]);
+        assert_eq!(ark.paths, vec!["bar".to_ipr(), "foo".to_ipr()].into());
+        assert_eq!(ark.metas, vec![(), ()].into());
+        assert_eq!(ark.files, vec![].into());
+        assert_eq!(ark.links, vec![].into());
+    }
 
-        // Reverse sorted order.
-        //
-        // Consumers will often want to read these from most nested to least,
-        // because applying permissions in any other order can lock yourself
-        // out and make you unable to finish the job.
+    #[test]
+    fn test_from_entries_uniq() {
+        let ark = Ark::from_entries(["foo", "bar", "foo", "bar", "bar"]);
+        assert_eq!(ark.paths, vec!["bar".to_ipr(), "foo".to_ipr()].into());
+        assert_eq!(ark.metas, vec![(), ()].into());
+        assert_eq!(ark.files, vec![].into());
+        assert_eq!(ark.links, vec![].into());
+    }
+
+    #[test]
+    fn test_from_entries_with_files() {
+        let ark = Ark::from_entries([
+            ("/dir1", None),
+            ("/file2.txt", Some("file2 contents")),
+            ("/file1.txt", Some("file1 contents")),
+            ("/dir3", None),
+            ("/dir2", None),
+            ("/file3.txt", Some("file3 contents")),
+        ]);
         assert_eq!(
-            dirs.next(),
-            Some((
-                &"dir1/dir2".to_ipr(),
-                &Attrs::new().append("UNIX_MODE", "16893"),
-            ))
+            ark.paths,
+            vec![
+                "/file1.txt".to_ipr(),
+                "/file2.txt".to_ipr(),
+                "/file3.txt".to_ipr(),
+                "/dir1".to_ipr(),
+                "/dir2".to_ipr(),
+                "/dir3".to_ipr(),
+            ]
+            .into()
         );
+        assert_eq!(ark.metas, vec![(), (), (), (), (), ()].into());
         assert_eq!(
-            dirs.next(),
-            Some((&"dir1".to_ipr(), &Attrs::new().append("UNIX_MODE", "16893"),))
+            ark.files,
+            vec![
+                "file1 contents".to_owned(),
+                "file2 contents".to_owned(),
+                "file3 contents".to_owned(),
+            ]
+            .into()
+        );
+        assert_eq!(ark.links, vec![].into());
+    }
+
+    #[test]
+    fn test_from_entries_with_everything() {
+        let ark = Ark::from_entries([
+            ("aaa", "a", Content::Directory),
+            ("bbb", "b", Content::Symlink("../b".into())),
+            ("ccc", "c", Content::File("Sea!".into())),
+        ]);
+        // Category order wins
+        assert_eq!(
+            ark.paths,
+            vec!["ccc".to_ipr(), "bbb".to_ipr(), "aaa".to_ipr(),].into()
+        );
+        assert_eq!(ark.metas, vec!["c", "b", "a"].into());
+        assert_eq!(ark.files, vec!["Sea!".to_owned()].into());
+        assert_eq!(ark.links, vec!["../b".to_owned()].into());
+    }
+
+    #[test]
+    fn test_to_entries() {
+        let ark = Ark::from_entries([
+            ("aaa", "a", Content::Directory),
+            ("bbb", "b", Content::Symlink("../b".into())),
+            ("ccc", "c", Content::File("Sea!".into())),
+        ]);
+        assert_eq!(
+            ark.to_entries(),
+            vec![
+                ("ccc".to_ipr(), "c", Content::File("Sea!".to_owned())),
+                ("bbb".to_ipr(), "b", Content::Symlink("../b".to_owned())),
+                ("aaa".to_ipr(), "a", Content::Directory),
+            ]
         );
     }
 }
